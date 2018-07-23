@@ -1,6 +1,9 @@
 package org.apache.spark.examples.sql
 
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.types._
+
 
 object SparkSQLExample {
   case class Persion(name: String,age: Long)
@@ -17,6 +20,8 @@ object SparkSQLExample {
 
     runBasicDataFrameExample(spark)
     runDatasetCreateionExample(spark)
+    runInferSchemaExample(spark)
+    runProgrammaticSchemaExample(spark)
     spark.stop()
   }
 
@@ -127,6 +132,90 @@ object SparkSQLExample {
 //      |  30|   Andy|
 //      |  19| Justin|
 //      +----+-------+
-
   }
+
+  private def runInferSchemaExample(spark: SparkSession): Unit = {
+    import spark.implicits._
+
+    //create an rdd of persion objects from a text file.covert it to a Dataframe
+    val peopleDF = spark.sparkContext
+      .textFile("src/main/resources/people.txt")
+      .map(_.split(","))
+      .map(attributes => Persion(attributes(0),attributes(1).trim.toInt))
+      .toDF()
+
+    //Register the Dataframe as a temporary view
+    peopleDF.createOrReplaceTempView("people")
+
+    //SQL statement can be run by using the sql methods provided by Spark
+    val teenagersDF = spark.sql("select name,age from people where age between 13 and 19")
+
+    teenagersDF.map(teenager => "Name: " + teenager(0)).show()
+//    +------------+
+//    |       value|
+//    +------------+
+//    |Name: Justin|
+//      +------------+
+
+    //or by filed name
+    teenagersDF.map(teenager => "Nmae: " + teenager.getAs[String]("name")).show()
+//    +------------+
+//    |       value|
+//    +------------+
+//    |Nmae: Justin|
+//      +------------+
+
+    // No pre-defined encoders for Dataset[Map[K,V]], define explicitly
+    implicit val mapEncoder = org.apache.spark.sql.Encoders.kryo[Map[String, Any]]
+    // Primitive types and case classes can be also defined as
+    // implicit val stringIntMapEncoder: Encoder[Map[String, Any]] = ExpressionEncoder()
+
+    // row.getValuesMap[T] retrieves multiple columns at once into a Map[String, T]
+    teenagersDF.map(teenager => teenager.getValuesMap[Any](List("name", "age"))).collect()
+    // Array(Map("name" -> "Justin", "age" -> 19))
+    // $example off:schema_inferring$
+  }
+
+  private def runProgrammaticSchemaExample(spark: SparkSession): Unit = {
+    import spark.implicits._
+
+    //create  an RDD
+    val peopleRDD = spark.sparkContext.textFile("src/main/resources/people.txt")
+
+    //the schemaString is encoded in a string
+    val schemaString = "name age"
+
+    //Generate the schema based on the string of schema
+    val fields = schemaString.split(" ")
+      .map(fieldName => StructField(fieldName, StringType, nullable = true))
+
+    val schema = StructType(fields)
+
+    //Convert records of the RDD (people) to Rows
+    val rowRDD = peopleRDD
+      .map(_.split(","))
+      .map(attributes => Row(attributes(0),attributes(1).trim))
+
+    //Apply the schema to the RDD
+    val peopleDF = spark.createDataFrame(rowRDD,schema)
+
+    //create a temporary view using the DataFrame
+    peopleDF.createOrReplaceTempView("people")
+
+    //SQL can be run over a temporary view create using DataFrames
+    val results = spark.sql("select name from people")
+
+    //The results of SQL queries are DataFrames and support all the normal RDD operations
+    //The columes of a row in the result can be accessed by field index or by field name
+
+    results.map(attributes => "Name: " + attributes(0)).show()
+    // +-------------+
+    // |        value|
+    // +-------------+
+    // |Name: Michael|
+    // |   Name: Andy|
+    // | Name: Justin|
+  }
+
+
 }
